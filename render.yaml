@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: medxbid-image-search
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    autoDeploy: false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12

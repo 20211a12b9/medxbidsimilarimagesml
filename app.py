@@ -31,7 +31,7 @@ def initialize_model():
         raise ImportError("Required libraries are not imported correctly")
     
     # Load the CLIP model and preprocess
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"  # Force CPU to reduce memory usage
     model, preprocess = clip.load("ViT-B/32", device=device)
 
     # Check if index files exist
@@ -43,6 +43,10 @@ def initialize_model():
 
     # Load valid image links
     valid_image_links_df = pd.read_csv("valid_image_links.csv")
+
+    # Clear CUDA cache if available
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 # Try to initialize on startup
 try:
@@ -72,7 +76,7 @@ def find_similar():
 
     try:
         # Open the uploaded image
-        img = Image.open(io.BytesIO(file.read()))
+        img = Image.open(io.BytesIO(file.read())).convert('RGB')
         query_input = preprocess(img).unsqueeze(0).to(model.device)
 
         # Generate the embedding for the query image
@@ -89,6 +93,11 @@ def find_similar():
         for idx in indices[0]:
             image_path = valid_image_links_df['image_url'].iloc[idx]
             similar_images.append(image_path)
+
+        # Clear memory
+        del query_input, query_features
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return jsonify({"similar_images": similar_images}), 200
 

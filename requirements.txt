@@ -1,0 +1,9 @@
+torch
+clip
+faiss-cpu
+pandas
+pillow
+flask
+flask-cors
+requests
+openpyxl

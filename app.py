@@ -1,53 +1,43 @@
 import os
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import faiss
+import torch
+import clip
 import pandas as pd
 import numpy as np
 from PIL import Image
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 import io
-
-try:
-    import torch
-    import clip
-except ModuleNotFoundError:
-    raise ImportError("torch or clip module is not installed. Please ensure these packages are installed in your environment.")
-
-try:
-    import faiss
-except ModuleNotFoundError:
-    raise ImportError("faiss module is not installed. Please ensure faiss is installed in your environment.")
 
 app = Flask(__name__)
 CORS(app)  # Enable Cross-Origin Resource Sharing (CORS)
 
-# Load the CLIP model and preprocess
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# Force CPU device to prevent memory issues
+device = "cpu"
+
 try:
+    # Explicitly specify device during model loading
     model, preprocess = clip.load("ViT-B/32", device=device)
-except Exception as e:
-    raise RuntimeError(f"Failed to load CLIP model: {str(e)}")
 
-# Load the FAISS index
-try:
+    # Load the FAISS index
     index = faiss.read_index("image_index.faiss")
-except FileNotFoundError:
-    raise FileNotFoundError("image_index.faiss not found. Please ensure it is present in the working directory.")
-except Exception as e:
-    raise RuntimeError(f"Failed to load FAISS index: {str(e)}")
 
-# Load valid image links
-try:
+    # Load valid image links
     valid_image_links_df = pd.read_csv("valid_image_links.csv")
     if 'image_url' not in valid_image_links_df.columns:
         raise ValueError("CSV file does not contain 'image_url' column.")
-except FileNotFoundError:
-    raise FileNotFoundError("valid_image_links.csv not found. Please ensure it is present in the working directory.")
-except Exception as e:
-    raise RuntimeError(f"Error loading valid_image_links.csv: {str(e)}")
 
-# Define the find-similar endpoint
+except Exception as e:
+    print(f"Initialization error: {e}")
+    model = preprocess = index = valid_image_links_df = None
+
 @app.route('/find-similar', methods=['POST'])
 def find_similar():
+    # Check if all resources are loaded
+    if model is None or preprocess is None or index is None or valid_image_links_df is None:
+        return jsonify({"error": "Resources not initialized properly"}), 500
+
+    # Check if the image is uploaded via file
     if 'image' not in request.files:
         return jsonify({"error": "No image file uploaded"}), 400
 
@@ -55,7 +45,7 @@ def find_similar():
 
     try:
         # Open the uploaded image
-        img = Image.open(io.BytesIO(file.read()))
+        img = Image.open(io.BytesIO(file.read())).convert('RGB')
         query_input = preprocess(img).unsqueeze(0).to(device)
 
         # Generate the embedding for the query image
@@ -78,5 +68,14 @@ def find_similar():
     except Exception as e:
         return jsonify({"error": f"Error processing image: {str(e)}"}), 500
 
+@app.route('/', methods=['GET'])
+def home():
+    return "MedXBid Image Search API is running!"
+
 if __name__ == '__main__':
-    app.run(port=5000, host="0.0.0.0")
+    # Use a lower memory footprint
+    app.run(
+        host='0.0.0.0', 
+        port=int(os.environ.get('PORT', 5000)),
+        threaded=False  # Disable threading to reduce memory usage
+    )

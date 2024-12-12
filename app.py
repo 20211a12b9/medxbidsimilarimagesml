@@ -5,18 +5,8 @@ import pandas as pd
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# Use a try-except block for imports
-try:
-    import torch
-    import clip
-    import faiss
-    from PIL import Image
-except ImportError as e:
-    print(f"Import error: {e}")
-    torch = clip = faiss = None
-
 app = Flask(__name__)
-CORS(app)  # Enable Cross-Origin Resource Sharing (CORS)
+CORS(app)
 
 # Global variables to store model and index
 model = None
@@ -24,80 +14,62 @@ preprocess = None
 index = None
 valid_image_links_df = None
 
-def initialize_model():
-    global model, preprocess, index, valid_image_links_df
-    
-    if torch is None or clip is None or faiss is None:
-        raise ImportError("Required libraries are not imported correctly")
-    
-    # Load the CLIP model and preprocess
-    device = "cpu"  # Force CPU to reduce memory usage
-    model, preprocess = clip.load("ViT-B/32", device=device)
-
-    # Check if index files exist
-    if not (os.path.exists("image_index.faiss") and os.path.exists("valid_image_links.csv")):
-        raise FileNotFoundError("Index files are missing. Please run download_and_index.py first.")
-
-    # Load the FAISS index
-    index = faiss.read_index("image_index.faiss")
-
-    # Load valid image links
-    valid_image_links_df = pd.read_csv("valid_image_links.csv")
-
-    # Clear CUDA cache if available
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-# Try to initialize on startup
-try:
-    initialize_model()
-except Exception as e:
-    print(f"Initialization error: {e}")
-
 @app.route('/', methods=['GET'])
 def home():
-    return "MedXBid Image Search API is running!"
+    return "MedXBid Image Search API is running! Use /find-similar endpoint."
 
 @app.route('/find-similar', methods=['POST'])
 def find_similar():
-    # Reinitialize model if not loaded
-    global model, preprocess, index, valid_image_links_df
-    if model is None:
-        try:
-            initialize_model()
-        except Exception as e:
-            return jsonify({"error": f"Model initialization failed: {str(e)}"}), 500
+    # Delay heavy imports to reduce initial memory footprint
+    import torch
+    import clip
+    import faiss
+    from PIL import Image
 
     # Check if the image is uploaded via file
     if 'image' not in request.files:
         return jsonify({"error": "No image file uploaded"}), 400
 
+    # Load model only when needed
+    global model, preprocess, index, valid_image_links_df
+    if model is None:
+        try:
+            # Use CPU to reduce memory
+            device = "cpu"
+            model, preprocess = clip.load("ViT-B/32", device=device)
+            
+            # Load FAISS index
+            index = faiss.read_index("image_index.faiss")
+            
+            # Load image links
+            valid_image_links_df = pd.read_csv("valid_image_links.csv")
+        except Exception as e:
+            return jsonify({"error": f"Model initialization failed: {str(e)}"}), 500
+
     file = request.files['image']
 
     try:
-        # Open the uploaded image
+        # Process image
         img = Image.open(io.BytesIO(file.read())).convert('RGB')
         query_input = preprocess(img).unsqueeze(0).to(model.device)
 
-        # Generate the embedding for the query image
+        # Generate embedding
         with torch.no_grad():
             query_features = model.encode_image(query_input)
-            query_features /= query_features.norm(dim=-1, keepdim=True)  # Normalize
+            query_features /= query_features.norm(dim=-1, keepdim=True)
 
-        # Search the FAISS index
-        k = 3  # Number of nearest neighbors
-        distances, indices = index.search(query_features.cpu().numpy(), k)
+        # Search index
+        distances, indices = index.search(query_features.cpu().numpy(), 3)
 
-        # Get the URLs of the most similar images
-        similar_images = []
-        for idx in indices[0]:
-            image_path = valid_image_links_df['image_url'].iloc[idx]
-            similar_images.append(image_path)
+        # Get similar image URLs
+        similar_images = [
+            valid_image_links_df['image_url'].iloc[idx] 
+            for idx in indices[0]
+        ]
 
         # Clear memory
         del query_input, query_features
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
         return jsonify({"similar_images": similar_images}), 200
 

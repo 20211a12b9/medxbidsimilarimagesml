@@ -1,8 +1,9 @@
+# Specify exact versions
+torch==2.1.0
+torchvision==0.16.0
+git+https://github.com/openai/CLIP.git@main
+numpy<2.0.0
+Pillow<10.0.0
 flask
 flask-cors
 gunicorn
-torch
-torchvision
-git+https://github.com/openai/CLIP.git
-numpy
-Pillow

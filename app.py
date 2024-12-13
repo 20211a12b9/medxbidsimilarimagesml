@@ -95,31 +95,31 @@ def create_app():
     def find_similar():
         if 'image' not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
-
+        file = request.files['image']
         try:
-            # Get the shared resource instance
-            searcher = get_resources()
+        # Open the uploaded image
+        img = Image.open(io.BytesIO(file.read()))
+        query_input = preprocess(img).unsqueeze(0).to(device)
 
-            # Read image with minimal memory
-            file = request.files['image']
-            img = Image.open(io.BytesIO(file.read())).convert('RGB')
+        # Generate the embedding for the query image
+        with torch.no_grad():
+            query_features = model.encode_image(query_input)
+            query_features /= query_features.norm(dim=-1, keepdim=True)  # Normalize
 
-            # Find similar images
-            similar_images = searcher.find_similar_images(img)
+        # Search the FAISS index
+        k = 3  # Number of nearest neighbors
+        distances, indices = index.search(query_features.cpu().numpy(), k)
 
-            return jsonify({
-                "similar_images": similar_images,
-                "count": len(similar_images)
-            }), 200
+        # Get the URLs of the most similar images
+        similar_images = []
+        for idx in indices[0]:
+            image_path = valid_image_links_df['image_url'].iloc[idx]
+            similar_images.append(image_path)
 
-        except Exception as e:
-            return jsonify({
-                "error": "Image processing failed",
-                "details": str(e)
-            }), 500
+        return jsonify({"similar_images": similar_images}), 200
 
-        finally:
-            gc.collect()
+    except Exception as e:
+        return jsonify({"error": f"Error processing image: {str(e)}"}), 500
 
     @app.route("/", methods=["GET"])
     def health_check():

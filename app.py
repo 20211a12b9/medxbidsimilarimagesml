@@ -91,12 +91,12 @@ def create_app():
     app = Flask(__name__)
     CORS(app)
 
-    @app.route('/find-similar', methods=['POST'])
-    def find_similar():
-        if 'image' not in request.files:
-            return jsonify({"error": "No image uploaded"}), 400
-        file = request.files['image']
-        try:
+   @app.route('/find-similar', methods=['POST'])
+def find_similar():
+    if 'image' not in request.files:
+        return jsonify({"error": "No image uploaded"}), 400
+    file = request.files['image']
+    try:
         # Open the uploaded image
         img = Image.open(io.BytesIO(file.read()))
         query_input = preprocess(img).unsqueeze(0).to(device)
@@ -120,6 +120,7 @@ def create_app():
 
     except Exception as e:
         return jsonify({"error": f"Error processing image: {str(e)}"}), 500
+
 
     @app.route("/", methods=["GET"])
     def health_check():

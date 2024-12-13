@@ -1,9 +1,8 @@
-torch
-clip
-faiss-cpu
-pandas
-pillow
 flask
 flask-cors
-requests
-openpyxl
+gunicorn
+torch
+torchvision
+git+https://github.com/openai/CLIP.git
+numpy
+Pillow

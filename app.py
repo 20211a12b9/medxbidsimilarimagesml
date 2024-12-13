@@ -10,6 +10,7 @@ from PIL import Image
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 
+
 class MemoryEfficientImageSearcher:
     def __init__(self, max_similar=3):
         self.device = "cpu"  # Force CPU to reduce memory usage
@@ -93,7 +94,6 @@ def create_app():
 
     @app.route('/find-similar', methods=['POST'])
     def find_similar():
-        # Strict memory-efficient request handling
         if 'image' not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
 
@@ -114,15 +114,18 @@ def create_app():
             }), 200
 
         except Exception as e:
-            # Minimal error reporting
             return jsonify({
                 "error": "Image processing failed",
                 "details": str(e)
             }), 500
 
         finally:
-            # Ensure memory is freed
             gc.collect()
+
+    @app.route("/", methods=["GET"])
+    def health_check():
+        """Health check endpoint"""
+        return jsonify({"status": "running"}), 200
 
     return app
 

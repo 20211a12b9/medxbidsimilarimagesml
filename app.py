@@ -1,61 +1,120 @@
 import os
-import faiss
+import io
+import gc
 import torch
+import faiss
 import clip
-import pandas as pd
 import numpy as np
+import pandas as pd
 from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import io
 
-app = Flask(__name__)
-CORS(app)  # Enable Cross-Origin Resource Sharing (CORS)
+# Global configuration
+MAX_SIMILAR_IMAGES = 3
+FAISS_INDEX_PATH = "image_index.faiss"
+VALID_LINKS_CSV_PATH = "valid_image_links.csv"
 
-# Load the CLIP model and preprocess
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model, preprocess = clip.load("ViT-B/32", device=device)
+class ImageSimilaritySearcher:
+    def __init__(self):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = None
+        self.preprocess = None
+        self.index = None
+        self.valid_image_links_df = None
 
-# Load the FAISS index
-index = faiss.read_index("image_index.faiss")
+    def load_resources(self):
+        """Load model, index, and image links with memory efficiency"""
+        # Load model only when needed
+        self.model, self.preprocess = clip.load("ViT-B/32", device=self.device)
+        
+        # Load FAISS index
+        self.index = faiss.read_index(FAISS_INDEX_PATH)
+        
+        # Use low-memory CSV reading
+        self.valid_image_links_df = pd.read_csv(
+            VALID_LINKS_CSV_PATH, 
+            low_memory=True, 
+            usecols=['image_url']
+        )
 
-# Load valid image links
-valid_image_links_df = pd.read_csv("valid_image_links.csv")
-if 'image_url' not in valid_image_links_df.columns:
-    raise ValueError("CSV file does not contain 'image_url' column.")
-#Correct using endpoint
-@app.route('/find-similar', methods=['POST'])
-def find_similar():
-    # Check if the image is uploaded via file
-    if 'image' not in request.files:
-        return jsonify({"error": "No image file uploaded"}), 400
-
-    file = request.files['image']
-
-    try:
-        # Open the uploaded image
-        img = Image.open(io.BytesIO(file.read()))
-        query_input = preprocess(img).unsqueeze(0).to(device)
-
-        # Generate the embedding for the query image
+    def encode_image(self, image):
+        """Generate memory-efficient image embedding"""
+        # Preprocess and move to device
+        query_input = self.preprocess(image).unsqueeze(0).to(self.device)
+        
+        # Generate embedding with reduced precision
         with torch.no_grad():
-            query_features = model.encode_image(query_input)
-            query_features /= query_features.norm(dim=-1, keepdim=True)  # Normalize
+            query_features = self.model.encode_image(query_input)
+            query_features /= query_features.norm(dim=-1, keepdim=True)
+            
+            # Reduce precision to float16
+            query_features = query_features.half().cpu().numpy()
+        
+        return query_features
 
-        # Search the FAISS index
-        k = 3  # Number of nearest neighbors
-        distances, indices = index.search(query_features.cpu().numpy(), k)
+    def find_similar_images(self, image):
+        """Find similar images with memory management"""
+        try:
+            # Encode image
+            query_features = self.encode_image(image)
+            
+            # Search FAISS index
+            distances, indices = self.index.search(query_features, MAX_SIMILAR_IMAGES)
+            
+            # Retrieve image URLs
+            similar_images = [
+                self.valid_image_links_df['image_url'].iloc[idx] 
+                for idx in indices[0]
+            ]
+            
+            return similar_images
+        
+        finally:
+            # Explicit memory clearing
+            torch.cuda.empty_cache()
+            gc.collect()
 
-        # Get the URLs of the most similar images
-        similar_images = []
-        for idx in indices[0]:
-            image_path = valid_image_links_df['image_url'].iloc[idx]
-            similar_images.append(image_path)
+def create_app():
+    """Factory function to create Flask app"""
+    app = Flask(__name__)
+    CORS(app)  # Enable Cross-Origin Resource Sharing
+    
+    # Initialize searcher
+    searcher = ImageSimilaritySearcher()
+    searcher.load_resources()
 
-        return jsonify({"similar_images": similar_images}), 200
+    @app.route('/find-similar', methods=['POST'])
+    def find_similar():
+        # Validate image upload
+        if 'image' not in request.files:
+            return jsonify({"error": "No image file uploaded"}), 400
+        
+        try:
+            # Read and process image
+            file = request.files['image']
+            img = Image.open(io.BytesIO(file.read()))
+            
+            # Find similar images
+            similar_images = searcher.find_similar_images(img)
+            
+            return jsonify({"similar_images": similar_images}), 200
+        
+        except Exception as e:
+            # Comprehensive error handling
+            return jsonify({
+                "error": f"Error processing image: {str(e)}",
+                "details": str(e)
+            }), 500
 
-    except Exception as e:
-        return jsonify({"error": f"Error processing image: {str(e)}"}), 500
+    return app
+
+# Application entry point
+app = create_app()
 
 if __name__ == '__main__':
-    app.run(port=5000, host="0.0.0.0")
+    app.run(
+        port=int(os.environ.get('PORT', 5000)), 
+        host="0.0.0.0", 
+        debug=False
+    )

@@ -12,31 +12,20 @@ import io
 app = Flask(__name__)
 CORS(app)  # Enable Cross-Origin Resource Sharing (CORS)
 
-# Force CPU device to prevent memory issues
-device = "cpu"
+# Load the CLIP model and preprocess
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model, preprocess = clip.load("ViT-B/32", device=device)
 
-try:
-    # Explicitly specify device during model loading
-    model, preprocess = clip.load("ViT-B/32", device=device)
+# Load the FAISS index
+index = faiss.read_index("image_index.faiss")
 
-    # Load the FAISS index
-    index = faiss.read_index("image_index.faiss")
-
-    # Load valid image links
-    valid_image_links_df = pd.read_csv("valid_image_links.csv")
-    if 'image_url' not in valid_image_links_df.columns:
-        raise ValueError("CSV file does not contain 'image_url' column.")
-
-except Exception as e:
-    print(f"Initialization error: {e}")
-    model = preprocess = index = valid_image_links_df = None
-
+# Load valid image links
+valid_image_links_df = pd.read_csv("valid_image_links.csv")
+if 'image_url' not in valid_image_links_df.columns:
+    raise ValueError("CSV file does not contain 'image_url' column.")
+#Correct using endpoint
 @app.route('/find-similar', methods=['POST'])
 def find_similar():
-    # Check if all resources are loaded
-    if model is None or preprocess is None or index is None or valid_image_links_df is None:
-        return jsonify({"error": "Resources not initialized properly"}), 500
-
     # Check if the image is uploaded via file
     if 'image' not in request.files:
         return jsonify({"error": "No image file uploaded"}), 400
@@ -45,7 +34,7 @@ def find_similar():
 
     try:
         # Open the uploaded image
-        img = Image.open(io.BytesIO(file.read())).convert('RGB')
+        img = Image.open(io.BytesIO(file.read()))
         query_input = preprocess(img).unsqueeze(0).to(device)
 
         # Generate the embedding for the query image
@@ -68,14 +57,5 @@ def find_similar():
     except Exception as e:
         return jsonify({"error": f"Error processing image: {str(e)}"}), 500
 
-@app.route('/', methods=['GET'])
-def home():
-    return "MedXBid Image Search API is running!"
-
 if __name__ == '__main__':
-    # Use a lower memory footprint
-    app.run(
-        host='0.0.0.0', 
-        port=int(os.environ.get('PORT', 5000)),
-        threaded=False  # Disable threading to reduce memory usage
-    )
+    app.run(port=5000, host="0.0.0.0")

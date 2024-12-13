@@ -10,111 +10,133 @@ from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# Global configuration
-MAX_SIMILAR_IMAGES = 3
-FAISS_INDEX_PATH = "image_index.faiss"
-VALID_LINKS_CSV_PATH = "valid_image_links.csv"
-
-class ImageSimilaritySearcher:
-    def __init__(self):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+class MemoryEfficientImageSearcher:
+    def __init__(self, max_similar=3):
+        self.device = "cpu"  # Force CPU to reduce memory usage
         self.model = None
         self.preprocess = None
         self.index = None
-        self.valid_image_links_df = None
+        self.valid_image_links = None
+        self.max_similar = max_similar
 
     def load_resources(self):
-        """Load model, index, and image links with memory efficiency"""
-        # Load model only when needed
+        """Load resources with minimal memory footprint"""
+        # Load model in CPU mode
         self.model, self.preprocess = clip.load("ViT-B/32", device=self.device)
         
-        # Load FAISS index
-        self.index = faiss.read_index(FAISS_INDEX_PATH)
+        # Use memory-mapped FAISS index
+        self.index = faiss.read_index("image_index.faiss", faiss.IO_FLAG_MMAP)
         
-        # Use low-memory CSV reading
-        self.valid_image_links_df = pd.read_csv(
-            VALID_LINKS_CSV_PATH, 
-            low_memory=True, 
-            usecols=['image_url']
-        )
+        # Use minimal memory DataFrame loading
+        self.valid_image_links = pd.read_csv(
+            "valid_image_links.csv", 
+            usecols=['image_url'], 
+            dtype={'image_url': str},
+            low_memory=True
+        )['image_url'].tolist()
 
     def encode_image(self, image):
-        """Generate memory-efficient image embedding"""
-        # Preprocess and move to device
+        """Generate extremely memory-efficient image embedding"""
+        # Resize image to reduce memory consumption
+        image = image.resize((224, 224))
+        
+        # Preprocess with minimal memory overhead
         query_input = self.preprocess(image).unsqueeze(0).to(self.device)
         
-        # Generate embedding with reduced precision
         with torch.no_grad():
-            query_features = self.model.encode_image(query_input)
-            query_features /= query_features.norm(dim=-1, keepdim=True)
+            # Use lowest precision possible
+            with torch.cuda.amp.autocast(enabled=False):
+                query_features = self.model.encode_image(query_input)
+                query_features /= query_features.norm(dim=-1, keepdim=True)
             
-            # Reduce precision to float16
-            query_features = query_features.half().cpu().numpy()
+            # Convert to most memory-efficient format
+            query_features = query_features.float().cpu().numpy().astype(np.float16)
         
         return query_features
 
     def find_similar_images(self, image):
-        """Find similar images with memory management"""
+        """Find similar images with extreme memory conservation"""
         try:
-            # Encode image
+            # Encode image with minimal memory
             query_features = self.encode_image(image)
             
-            # Search FAISS index
-            distances, indices = self.index.search(query_features, MAX_SIMILAR_IMAGES)
+            # Limit search to prevent excessive memory use
+            distances, indices = self.index.search(query_features, self.max_similar)
             
-            # Retrieve image URLs
+            # Retrieve image URLs with minimal overhead
             similar_images = [
-                self.valid_image_links_df['image_url'].iloc[idx] 
-                for idx in indices[0]
+                self.valid_image_links[idx] 
+                for idx in indices[0] 
+                if 0 <= idx < len(self.valid_image_links)
             ]
             
             return similar_images
         
+        except Exception as e:
+            print(f"Search error: {e}")
+            return []
+        
         finally:
-            # Explicit memory clearing
+            # Aggressive memory cleanup
             torch.cuda.empty_cache()
             gc.collect()
 
 def create_app():
-    """Factory function to create Flask app"""
+    """Create Flask application with minimal memory footprint"""
     app = Flask(__name__)
-    CORS(app)  # Enable Cross-Origin Resource Sharing
+    CORS(app)
     
-    # Initialize searcher
-    searcher = ImageSimilaritySearcher()
-    searcher.load_resources()
+    # Global searcher to prevent repeated loading
+    searcher = MemoryEfficientImageSearcher()
+    
+    # Load resources once at startup
+    try:
+        searcher.load_resources()
+    except Exception as e:
+        print(f"Resource loading error: {e}")
+        raise
 
     @app.route('/find-similar', methods=['POST'])
     def find_similar():
-        # Validate image upload
+        # Strict memory-efficient request handling
         if 'image' not in request.files:
-            return jsonify({"error": "No image file uploaded"}), 400
+            return jsonify({"error": "No image uploaded"}), 400
         
         try:
-            # Read and process image
+            # Read image with minimal memory
             file = request.files['image']
-            img = Image.open(io.BytesIO(file.read()))
+            img = Image.open(io.BytesIO(file.read())).convert('RGB')
             
             # Find similar images
             similar_images = searcher.find_similar_images(img)
             
-            return jsonify({"similar_images": similar_images}), 200
+            return jsonify({
+                "similar_images": similar_images,
+                "count": len(similar_images)
+            }), 200
         
         except Exception as e:
-            # Comprehensive error handling
+            # Minimal error reporting
             return jsonify({
-                "error": f"Error processing image: {str(e)}",
+                "error": "Image processing failed",
                 "details": str(e)
             }), 500
+        
+        finally:
+            # Ensure memory is freed
+            gc.collect()
 
     return app
 
-# Application entry point
+# Application initialization
 app = create_app()
 
 if __name__ == '__main__':
+    # Use gunicorn for better memory management
+    # pip install gunicorn
+    # Run with: gunicorn -w 1 -b 0.0.0.0:5000 app:app
     app.run(
-        port=int(os.environ.get('PORT', 5000)), 
-        host="0.0.0.0", 
-        debug=False
+        host='0.0.0.0', 
+        port=int(os.environ.get('PORT', 5000)),
+        threaded=False  # Disable threading to reduce memory
     )

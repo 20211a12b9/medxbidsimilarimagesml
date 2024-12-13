@@ -23,8 +23,7 @@ class MemoryEfficientImageSearcher:
     def load_resources(self):
         """Load resources with minimal memory footprint"""
         # Load model in CPU mode
-        self.model, self.preprocess = clip.load("RN50", device=self.device)  # Smaller model
-
+        self.model, self.preprocess = clip.load("ViT-B/32", device=self.device)
         # Use memory-mapped FAISS index
         self.index = faiss.read_index("image_index.faiss", faiss.IO_FLAG_MMAP)
 

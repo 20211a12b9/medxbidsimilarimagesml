@@ -1,9 +1,19 @@
+# Core Libraries
 flask
 flask-cors
 gunicorn
+
+# Machine Learning & Data Processing
 torch
 torchvision
 numpy
-Pillow
+pandas
 faiss-cpu
 git+https://github.com/openai/CLIP.git
+
+# Image Processing
+Pillow
+opencv-python-headless
+
+# Debugging and Utilities
+packaging

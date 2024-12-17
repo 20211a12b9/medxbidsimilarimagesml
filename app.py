@@ -88,7 +88,8 @@ def get_resources():
 
 def create_app():
     app = Flask(__name__)
-    CORS(app)
+    # CORS(app)
+    CORS(app, resources={r"/*": {"origins": "*"}})
 
     @app.route('/find-similar', methods=['POST'])
     def find_similar():

@@ -89,7 +89,23 @@ def get_resources():
 def create_app():
     app = Flask(__name__)
     # CORS(app)
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    CORS(app, resources={
+        r"/find-similar": {
+            "origins": [
+                "http://localhost:8081",  # Your local development frontend
+                "https://youractualfrontendsite.com"  # Your production frontend
+            ],
+            "methods": ["POST", "OPTIONS"],
+            "allow_headers": ["Content-Type"]
+        }
+    })
+
+    @app.after_request
+    def after_request(response):
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
 
     @app.route('/find-similar', methods=['POST'])
     def find_similar():

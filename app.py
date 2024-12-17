@@ -93,7 +93,7 @@ def create_app():
         r"/find-similar": {
             "origins": [
                 "http://localhost:8081",  # Your local development frontend
-                "https://youractualfrontendsite.com"  # Your production frontend
+                "https://medxbidsimilarimagesml.onrender.com"  # Your production frontend
             ],
             "methods": ["POST", "OPTIONS"],
             "allow_headers": ["Content-Type"]

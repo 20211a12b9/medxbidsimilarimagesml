@@ -87,37 +87,38 @@ def get_resources():
     return g.resources
 
 def create_app():
-    """Create Flask application with minimal memory footprint"""
     app = Flask(__name__)
     CORS(app)
 
     @app.route('/find-similar', methods=['POST'])
     def find_similar():
-        resources = get_resources()  # Ensure we have loaded resources
+        resources = get_resources()
+
+        # Check for uploaded image
         if 'image' not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
+
         file = request.files['image']
+
         try:
-            # Open the uploaded image
-            img = Image.open(io.BytesIO(file.read()))
+            # Open and process the uploaded image
+            img = Image.open(io.BytesIO(file.read())).convert('RGB')
+            similar_images = resources.find_similar_images(img)
 
-            # Generate the embedding for the query image using resources
-            query_features = resources.encode_image(img)
-
-            # Search the FAISS index
-            distances, indices = resources.index.search(query_features, resources.max_similar)
-
-            # Get the URLs of the most similar images
-            similar_images = [
-                resources.valid_image_links[idx]
-                for idx in indices[0]
-                if 0 <= idx < len(resources.valid_image_links)
-            ]
-
-            return jsonify({"similar_images": similar_images}), 200
+            return jsonify({
+                "similar_images": similar_images,
+                "count": len(similar_images)
+            }), 200
 
         except Exception as e:
             return jsonify({"error": f"Error processing image: {str(e)}"}), 500
+
+    @app.route("/", methods=["GET"])
+    def health_check():
+        """Health check endpoint"""
+        return jsonify({"status": "running"}), 200
+
+    return app
 
     @app.route("/", methods=["GET"])
     def health_check():

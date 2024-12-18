@@ -107,7 +107,7 @@ def create_app():
             return jsonify({"error": "No image uploaded"}), 400
 
         file = request.files['image']
-
+        print("starting")
         try:
             # Process uploaded image
             img = Image.open(io.BytesIO(file.read())).convert('RGB')

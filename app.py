@@ -110,13 +110,13 @@ def create_app():
     @app.route('/find-similar', methods=['POST'])
     def find_similar():
         resources = get_resources()
-
+        print("starting---")
         # Check for uploaded image
         if 'image' not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
 
         file = request.files['image']
-
+        print("middle-----")
         try:
             # Open and process the uploaded image
             img = Image.open(io.BytesIO(file.read())).convert('RGB')
@@ -126,7 +126,8 @@ def create_app():
                 "similar_images": similar_images,
                 "count": len(similar_images)
             }), 200
-
+            print("print(similar_images)",similar_images)
+        
         except Exception as e:
             return jsonify({"error": f"Error processing image: {str(e)}"}), 500
 

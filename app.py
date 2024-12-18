@@ -7,7 +7,7 @@ import clip
 import numpy as np
 import pandas as pd
 from PIL import Image
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 class MemoryEfficientImageSearcher:
@@ -20,49 +20,53 @@ class MemoryEfficientImageSearcher:
         self.max_similar = max_similar
 
     def load_resources(self):
-        """Optimize resource loading"""
-        # Use lower memory model
+        """Ultra-lightweight resource loading"""
+        # Use smaller model variant if possible
         self.model, self.preprocess = clip.load("ViT-B/32", device=self.device)
         
-        # Use memory-mapped index with read-only mode
-        self.index = faiss.read_index("image_index.faiss", faiss.IO_FLAG_MMAP | faiss.IO_FLAG_READ_ONLY)
-        
-        # Minimal memory DataFrame loading
-        self.valid_image_links = pd.read_csv(
-            "valid_image_links.csv",
-            usecols=['image_url'],
-            dtype={'image_url': str},
-            low_memory=True
-        )['image_url'].tolist()
+        # Ensure index is memory-mapped
+        try:
+            self.index = faiss.read_index("image_index.faiss", faiss.IO_FLAG_MMAP | faiss.IO_FLAG_READ_ONLY)
+        except Exception as e:
+            print(f"Index loading error: {e}")
+            self.index = None
+
+        # Minimal CSV loading
+        try:
+            self.valid_image_links = pd.read_csv(
+                "valid_image_links.csv",
+                usecols=['image_url'],
+                dtype={'image_url': str},
+                low_memory=True
+            )['image_url'].tolist()
+        except Exception as e:
+            print(f"CSV loading error: {e}")
+            self.valid_image_links = []
 
     def encode_image(self, image):
-        """Ultra-low memory image encoding"""
-        # Extremely small resize to minimize memory
-        image = image.resize((64, 64))  # Even smaller resolution
+        """Extremely low-memory image encoding"""
+        # Minimize image size
+        image = image.resize((32, 32))  # Smallest possible resize
 
-        # Preprocess with minimal overhead
         query_input = self.preprocess(image).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            # Use lowest precision possible
+            # Ultra-low precision
             query_features = self.model.encode_image(query_input)
             query_features /= query_features.norm(dim=-1, keepdim=True)
-
-            # Most memory-efficient conversion
             query_features = query_features.float().cpu().numpy().astype(np.float16)
 
         return query_features
 
     def find_similar_images(self, image):
         """Minimal memory similar image search"""
-        try:
-            # Encode image with minimal memory
-            query_features = self.encode_image(image)
+        if self.index is None or not self.valid_image_links:
+            return []
 
-            # Limit search to prevent excessive memory use
+        try:
+            query_features = self.encode_image(image)
             distances, indices = self.index.search(query_features, self.max_similar)
 
-            # Retrieve image URLs with minimal overhead
             similar_images = [
                 self.valid_image_links[idx]
                 for idx in indices[0]
@@ -76,10 +80,13 @@ class MemoryEfficientImageSearcher:
             return []
 
         finally:
-            # Aggressive memory cleanup
-            del query_features
+            # Aggressive cleanup
             torch.cuda.empty_cache()
             gc.collect()
+
+# Global searcher to reduce repeated loading
+global_searcher = MemoryEfficientImageSearcher()
+global_searcher.load_resources()
 
 def create_app():
     app = Flask(__name__)
@@ -93,10 +100,6 @@ def create_app():
         }
     })
 
-    # Global cache for resources
-    resources = MemoryEfficientImageSearcher()
-    resources.load_resources()
-
     @app.route('/find-similar', methods=['POST'])
     def find_similar():
         # Check for uploaded image
@@ -106,9 +109,9 @@ def create_app():
         file = request.files['image']
 
         try:
-            # Open and process the uploaded image
+            # Process uploaded image
             img = Image.open(io.BytesIO(file.read())).convert('RGB')
-            similar_images = resources.find_similar_images(img)
+            similar_images = global_searcher.find_similar_images(img)
 
             return jsonify({
                 "similar_images": similar_images,
@@ -116,11 +119,11 @@ def create_app():
             }), 200
 
         except Exception as e:
+            print(f"Processing error: {e}")
             return jsonify({"error": f"Error processing image: {str(e)}"}), 500
 
     @app.route("/", methods=["GET"])
     def health_check():
-        """Health check endpoint"""
         return jsonify({"status": "running"}), 200
 
     return app
@@ -129,10 +132,8 @@ def create_app():
 app = create_app()
 
 if __name__ == '__main__':
-    # Use gunicorn with minimal workers
-    # Run with: gunicorn -w 1 -b 0.0.0.0:5000 app:app
     app.run(
         host='0.0.0.0',
         port=int(os.environ.get('PORT', 5000)),
-        threaded=False  # Disable threading to reduce memory
+        threaded=False
     )

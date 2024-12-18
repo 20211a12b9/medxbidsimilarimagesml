@@ -1,6 +1,7 @@
 import os
 import io
 import gc
+import sys
 import torch
 import faiss
 import clip
@@ -10,7 +11,12 @@ from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-class MemoryEfficientImageSearcher:
+# Add memory logging
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class UltraLightImageSearcher:
     def __init__(self, max_similar=3):
         self.device = "cpu"
         self.model = None
@@ -20,51 +26,66 @@ class MemoryEfficientImageSearcher:
         self.max_similar = max_similar
 
     def load_resources(self):
-        """Ultra-lightweight resource loading"""
-        # Use smaller model variant if possible
-        self.model, self.preprocess = clip.load("ViT-B/32", device=self.device)
-        
-        # Ensure index is memory-mapped
+        """Extreme memory-conscious resource loading"""
         try:
-            self.index = faiss.read_index("image_index.faiss", faiss.IO_FLAG_MMAP | faiss.IO_FLAG_READ_ONLY)
-        except Exception as e:
-            print(f"Index loading error: {e}")
-            self.index = None
+            # Use smallest possible model
+            self.model, self.preprocess = clip.load("ViT-B/32", device=self.device)
+            
+            # Verify index file exists and is readable
+            if not os.path.exists("image_index.faiss"):
+                logger.error("FAISS index file not found!")
+                return False
 
-        # Minimal CSV loading
-        try:
+            # Minimal index loading
+            self.index = faiss.read_index("image_index.faiss", faiss.IO_FLAG_MMAP | faiss.IO_FLAG_READ_ONLY)
+            
+            # Ultra-minimal CSV loading
+            if not os.path.exists("valid_image_links.csv"):
+                logger.error("Image links CSV not found!")
+                return False
+
             self.valid_image_links = pd.read_csv(
                 "valid_image_links.csv",
                 usecols=['image_url'],
                 dtype={'image_url': str},
+                nrows=1000,  # Limit rows to reduce memory
                 low_memory=True
             )['image_url'].tolist()
+
+            logger.info(f"Loaded {len(self.valid_image_links)} image links")
+            return True
+
         except Exception as e:
-            print(f"CSV loading error: {e}")
-            self.valid_image_links = []
+            logger.error(f"Resource loading error: {e}")
+            return False
 
     def encode_image(self, image):
-        """Extremely low-memory image encoding"""
-        # Minimize image size
-        image = image.resize((32, 32))  # Smallest possible resize
+        """Minimal memory image encoding"""
+        try:
+            # Extreme resize
+            image = image.resize((16, 16))  # Tiny image
 
-        query_input = self.preprocess(image).unsqueeze(0).to(self.device)
+            query_input = self.preprocess(image).unsqueeze(0).to(self.device)
 
-        with torch.no_grad():
-            # Ultra-low precision
-            query_features = self.model.encode_image(query_input)
-            query_features /= query_features.norm(dim=-1, keepdim=True)
-            query_features = query_features.float().cpu().numpy().astype(np.float16)
+            with torch.no_grad():
+                query_features = self.model.encode_image(query_input)
+                query_features /= query_features.norm(dim=-1, keepdim=True)
+                query_features = query_features.float().cpu().numpy().astype(np.float16)
 
-        return query_features
+            return query_features
+
+        except Exception as e:
+            logger.error(f"Image encoding error: {e}")
+            return None
 
     def find_similar_images(self, image):
-        """Minimal memory similar image search"""
-        if self.index is None or not self.valid_image_links:
-            return []
-
+        """Absolute minimal memory similar image search"""
         try:
             query_features = self.encode_image(image)
+            
+            if query_features is None or self.index is None:
+                return []
+
             distances, indices = self.index.search(query_features, self.max_similar)
 
             similar_images = [
@@ -76,7 +97,7 @@ class MemoryEfficientImageSearcher:
             return similar_images
 
         except Exception as e:
-            print(f"Search error: {e}")
+            logger.error(f"Similar image search error: {e}")
             return []
 
         finally:
@@ -84,14 +105,20 @@ class MemoryEfficientImageSearcher:
             torch.cuda.empty_cache()
             gc.collect()
 
-# Global searcher to reduce repeated loading
-global_searcher = MemoryEfficientImageSearcher()
-global_searcher.load_resources()
+# Global searcher with minimal initialization
+def create_safe_searcher():
+    searcher = UltraLightImageSearcher()
+    if not searcher.load_resources():
+        logger.error("Failed to load resources. Exiting.")
+        sys.exit(1)
+    return searcher
+
+# Create searcher once
+global_searcher = create_safe_searcher()
 
 def create_app():
     app = Flask(__name__)
     
-    # Comprehensive CORS configuration
     CORS(app, resources={
         r"/find-similar": {
             "origins": ["*"],
@@ -102,14 +129,12 @@ def create_app():
 
     @app.route('/find-similar', methods=['POST'])
     def find_similar():
-        # Check for uploaded image
         if 'image' not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
 
         file = request.files['image']
-        print("starting")
+
         try:
-            # Process uploaded image
             img = Image.open(io.BytesIO(file.read())).convert('RGB')
             similar_images = global_searcher.find_similar_images(img)
 
@@ -119,7 +144,7 @@ def create_app():
             }), 200
 
         except Exception as e:
-            print(f"Processing error: {e}")
+            logger.error(f"Processing error: {e}")
             return jsonify({"error": f"Error processing image: {str(e)}"}), 500
 
     @app.route("/", methods=["GET"])
